@@ -65,6 +65,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
         );
 
         // into tunnel
+        console_log!("start run tunnel");
         if let Err(err) = run_tunnel(socket, user_id, proxy_ip).await {
             // log error
             console_error!("Tunnel error: {}", err);
@@ -72,6 +73,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
             // close websocket connection
             _ = server.close(Some(1003), Some("invalid request"));
         }
+        console_log!("run tunnel end");
     });
 
     Response::from_websocket(client)
@@ -213,6 +215,8 @@ mod proxy {
         target: &str,
         port: u16,
     ) -> Result<()> {
+        console_log!("processing tcp outbound: {}:{}", target, port);
+
         // connect to remote socket
         let mut remote_socket = Socket::builder().connect(target, port).map_err(|e| {
             Error::new(
