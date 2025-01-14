@@ -6,11 +6,11 @@ use worker::*;
 #[event(fetch)]
 async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     // get user id
-    let user_id = env.var("USER_ID")?.to_string();
+    let user_id = env.secret("USER_ID")?.to_string();
     let user_id = parse_user_id(&user_id);
 
     // get proxy ip list
-    let proxy_ip = env.var("PROXY_IP")?.to_string();
+    let proxy_ip = env.secret("PROXY_IP")?.to_string();
     let proxy_ip = proxy_ip
         .split_ascii_whitespace()
         .filter(|s| !s.is_empty())
@@ -19,7 +19,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
 
     // better disguising;
     let fallback_site = env
-        .var("FALLBACK_SITE")
+        .secret("FALLBACK_SITE")
         .unwrap_or(JsValue::from_str("").into())
         .to_string();
     let should_fallback = req
@@ -31,7 +31,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     // show uri
     let show_uri = env.var("SHOW_URI")?.to_string().parse().unwrap_or(false);
     let request_path = req.path().to_string();
-    let uuid_str = env.var("USER_ID")?.to_string();
+    let uuid_str = env.secret("USER_ID")?.to_string();
     let host_str = req.url()?.host_str().unwrap().to_string();
 
     if should_fallback && show_uri && request_path.contains(uuid_str.as_str()) {
@@ -67,7 +67,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
         // into tunnel
         if let Err(err) = run_tunnel(socket, user_id, proxy_ip).await {
             // log error
-            console_error!("error: {}", err);
+            console_error!("Tunnel error: {}", err);
 
             // close websocket connection
             _ = server.close(Some(1003), Some("invalid request"));
