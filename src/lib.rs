@@ -36,6 +36,9 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     let early_data = req.headers().get("sec-websocket-protocol")?;
     let early_data = parse_early_data(early_data)?;
 
+    // let _path = req.path();
+    console_log!("processing request");
+
     // Accept / handle a websocket connection
     let WebSocketPair { client, server } = WebSocketPair::new()?;
     server.accept()?;
@@ -126,7 +129,9 @@ mod proxy {
         }
 
         // verify user_id
-        if client_socket.read_bytes(16).await? != user_id {
+        let req_uid = client_socket.read_bytes(16).await?;
+        console_log!("request user_id: {:?}", req_uid);
+        if req_uid != user_id {
             return Err(Error::new(ErrorKind::InvalidData, "invalid user id"));
         }
 
@@ -157,6 +162,8 @@ mod proxy {
                 return Err(Error::new(ErrorKind::InvalidData, "invalid address type"));
             }
         };
+
+        console_log!("proxying {}:{}", remote_addr, remote_port);
 
         // process outbound
         match network_type {
