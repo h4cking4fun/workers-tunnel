@@ -85,8 +85,8 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     }
 
     // ready early data
-    // let early_data = req.headers().get("sec-websocket-protocol")?;
-    // let early_data = parse_early_data(early_data)?;
+    let early_data = req.headers().get("sec-websocket-protocol")?;
+    let early_data = parse_early_data(early_data)?;
 
     // Accept / handle a websocket connection
     let WebSocketPair { client, server } = WebSocketPair::new()?;
@@ -95,37 +95,37 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
 
     console_log!("spawn websocket tunnel at {:?}", time);
     wasm_bindgen_futures::spawn_local(async move {
-        let mut event_stream = server.events().expect("could not open stream");
-        console_log!("start read event stream");
+        // let mut event_stream = server.events().expect("could not open stream");
+        // console_log!("start read event stream");
 
-        while let Some(event) = event_stream.next().await {
-            console_log!("received event: {:?}", event);
+        // while let Some(event) = event_stream.next().await {
+        //     console_log!("received event: {:?}", event);
 
-            match event.expect("received error in websocket") {
-                WebsocketEvent::Message(msg) => server.send(&msg.text()).unwrap(),
-                WebsocketEvent::Close(event) => console_log!("close event: {:?}", event),
-            }
-        }
-
-        console_log!("end read event stream for {:?}", time);
-
-        // // create websocket stream
-        // let socket = WebSocketStream::new(
-        //     &server,
-        //     server.events().expect("could not open stream"),
-        //     early_data,
-        // );
-
-        // // into tunnel
-        // console_log!("start run tunnel");
-        // if let Err(err) = run_tunnel(socket, user_id, proxy_ip).await {
-        //     // log error
-        //     console_error!("Tunnel error: {}", err);
-
-        //     // close websocket connection
-        //     _ = server.close(Some(1003), Some("invalid request"));
+        //     match event.expect("received error in websocket") {
+        //         WebsocketEvent::Message(msg) => server.send(&msg.text()).unwrap(),
+        //         WebsocketEvent::Close(event) => console_log!("close event: {:?}", event),
+        //     }
         // }
-        // console_log!("run tunnel end");
+
+        // console_log!("end read event stream for {:?}", time);
+
+        // create websocket stream
+        let socket = WebSocketStream::new(
+            &server,
+            server.events().expect("could not open stream"),
+            early_data,
+        );
+
+        // into tunnel
+        console_log!("start run tunnel");
+        if let Err(err) = run_tunnel(socket, user_id, proxy_ip).await {
+            // log error
+            console_error!("Tunnel error: {}", err);
+
+            // close websocket connection
+            _ = server.close(Some(1003), Some("invalid request"));
+        }
+        console_log!("run tunnel end for {:?}", time);
     });
 
     Response::from_websocket(client)
@@ -189,6 +189,15 @@ mod proxy {
     }
 
     pub async fn run_tunnel(
+        client_socket: WebSocketStream<'_>,
+        user_id: Vec<u8>,
+        proxy_ip: Vec<String>,
+    ) -> Result<()> {
+        console_log!("run tunnel start");
+        Ok(())
+    }
+
+    pub async fn run_tunnel1(
         mut client_socket: WebSocketStream<'_>,
         user_id: Vec<u8>,
         proxy_ip: Vec<String>,
