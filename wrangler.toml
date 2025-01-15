@@ -11,3 +11,6 @@ head_sampling_rate = 1
 
 [vars]
 SHOW_URI = "true"
+
+[env.dev.vars]
+SHOW_URI = "true"

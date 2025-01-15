@@ -1,7 +1,40 @@
+#![allow(dead_code, unused_variables, unused_imports)]
+
+use std::time;
+
 use crate::proxy::{parse_early_data, parse_user_id, run_tunnel};
 use crate::websocket::WebSocketStream;
+use futures_util::StreamExt;
 use wasm_bindgen::JsValue;
 use worker::*;
+
+mod html {
+    pub const INDEX: &str = r#"
+    <!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <body>
+    <button id="send">Connect</button>
+
+    <script>
+      const websocket = new WebSocket('wss://cf-dev.happycoder.net')
+      websocket.addEventListener('message', event => {
+        console.log('Message received from server')
+        console.log(event.data)
+      })
+
+      document.getElementById('send').addEventListener('click', () => {
+        websocket.send('Hello from client')
+      })
+    </script>
+  </body>
+</html>
+    "#;
+}
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
@@ -44,36 +77,54 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     }
 
     if should_fallback && !fallback_site.is_empty() {
-        let req = Fetch::Url(Url::parse(&fallback_site)?);
-        return req.send().await;
+        return Response::from_html(html::INDEX);
+
+        // let req = Fetch::Url(Url::parse(&fallback_site)?);
+        // return req.send().await;
     }
 
     // ready early data
-    let early_data = req.headers().get("sec-websocket-protocol")?;
-    let early_data = parse_early_data(early_data)?;
+    // let early_data = req.headers().get("sec-websocket-protocol")?;
+    // let early_data = parse_early_data(early_data)?;
 
     // Accept / handle a websocket connection
     let WebSocketPair { client, server } = WebSocketPair::new()?;
     server.accept()?;
+    let time = time::SystemTime::now();
 
+    console_log!("spawn websocket tunnel at {:?}", time);
     wasm_bindgen_futures::spawn_local(async move {
-        // create websocket stream
-        let socket = WebSocketStream::new(
-            &server,
-            server.events().expect("could not open stream"),
-            early_data,
-        );
+        let mut event_stream = server.events().expect("could not open stream");
+        console_log!("start read event stream");
 
-        // into tunnel
-        console_log!("start run tunnel");
-        if let Err(err) = run_tunnel(socket, user_id, proxy_ip).await {
-            // log error
-            console_error!("Tunnel error: {}", err);
+        while let Some(event) = event_stream.next().await {
+            console_log!("received event: {:?}", event);
 
-            // close websocket connection
-            _ = server.close(Some(1003), Some("invalid request"));
+            match event.expect("received error in websocket") {
+                WebsocketEvent::Message(msg) => server.send(&msg.text()).unwrap(),
+                WebsocketEvent::Close(event) => console_log!("close event: {:?}", event),
+            }
         }
-        console_log!("run tunnel end");
+
+        console_log!("end read event stream for {:?}", time);
+
+        // // create websocket stream
+        // let socket = WebSocketStream::new(
+        //     &server,
+        //     server.events().expect("could not open stream"),
+        //     early_data,
+        // );
+
+        // // into tunnel
+        // console_log!("start run tunnel");
+        // if let Err(err) = run_tunnel(socket, user_id, proxy_ip).await {
+        //     // log error
+        //     console_error!("Tunnel error: {}", err);
+
+        //     // close websocket connection
+        //     _ = server.close(Some(1003), Some("invalid request"));
+        // }
+        // console_log!("run tunnel end");
     });
 
     Response::from_websocket(client)
@@ -131,6 +182,9 @@ mod proxy {
             bytes.push((h << 4) | l)
         }
         bytes
+    }
+
+    pub async fn run_tunnel2() {
     }
 
     pub async fn run_tunnel(
