@@ -91,24 +91,8 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     // Accept / handle a websocket connection
     let WebSocketPair { client, server } = WebSocketPair::new()?;
     server.accept()?;
-    let time = random() * 1000.0;
 
-    console_log!("spawn websocket tunnel at {:?}", time);
     wasm_bindgen_futures::spawn_local(async move {
-        // let mut event_stream = server.events().expect("could not open stream");
-        // console_log!("start read event stream");
-
-        // while let Some(event) = event_stream.next().await {
-        //     console_log!("received event: {:?}", event);
-
-        //     match event.expect("received error in websocket") {
-        //         WebsocketEvent::Message(msg) => server.send(&msg.text()).unwrap(),
-        //         WebsocketEvent::Close(event) => console_log!("close event: {:?}", event),
-        //     }
-        // }
-
-        // console_log!("end read event stream for {:?}", time);
-
         // create websocket stream
         let socket = WebSocketStream::new(
             &server,
@@ -125,7 +109,6 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
             // close websocket connection
             _ = server.close(Some(1003), Some("invalid request"));
         }
-        console_log!("run tunnel end for {:?}", time);
     });
 
     Response::from_websocket(client)
@@ -185,19 +168,7 @@ mod proxy {
         bytes
     }
 
-    pub async fn run_tunnel2() {
-    }
-
     pub async fn run_tunnel(
-        client_socket: WebSocketStream<'_>,
-        user_id: Vec<u8>,
-        proxy_ip: Vec<String>,
-    ) -> Result<()> {
-        console_log!("run tunnel start");
-        Ok(())
-    }
-
-    pub async fn run_tunnel1(
         mut client_socket: WebSocketStream<'_>,
         user_id: Vec<u8>,
         proxy_ip: Vec<String>,
