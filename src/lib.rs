@@ -5,6 +5,7 @@ use std::time;
 use crate::proxy::{parse_early_data, parse_user_id, run_tunnel};
 use crate::websocket::WebSocketStream;
 use futures_util::StreamExt;
+use js_sys::Math::random;
 use wasm_bindgen::JsValue;
 use worker::*;
 
@@ -90,7 +91,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     // Accept / handle a websocket connection
     let WebSocketPair { client, server } = WebSocketPair::new()?;
     server.accept()?;
-    let time = time::SystemTime::now();
+    let time = random() * 1000.0;
 
     console_log!("spawn websocket tunnel at {:?}", time);
     wasm_bindgen_futures::spawn_local(async move {
