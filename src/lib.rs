@@ -92,7 +92,11 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     let WebSocketPair { client, server } = WebSocketPair::new()?;
     server.accept()?;
 
+    let id = random() * 10000.0;
+    console_log!("New WebSocket connection: {}", id);
     wasm_bindgen_futures::spawn_local(async move {
+        console_log!("Spawned task for WebSocket connection: {}", id);
+
         // create websocket stream
         let socket = WebSocketStream::new(
             &server,
@@ -101,14 +105,16 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
         );
 
         // into tunnel
-        console_log!("start run tunnel");
+        console_log!("start run tunnel: {}", id);
         if let Err(err) = run_tunnel(socket, user_id, proxy_ip).await {
             // log error
-            console_error!("Tunnel error: {}", err);
+            console_error!("Tunnel error: {}, id: {}", err, id);
 
             // close websocket connection
             _ = server.close(Some(1003), Some("invalid request"));
         }
+
+        console_log!("Spawned task for WebSocket connection finished: {}", id);
     });
 
     Response::from_websocket(client)
