@@ -412,7 +412,7 @@ mod websocket {
     use bytes::{BufMut, BytesMut};
     use pin_project::pin_project;
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-    use worker::{EventStream, WebSocket, WebsocketEvent};
+    use worker::{console_log, EventStream, WebSocket, WebsocketEvent};
 
     #[pin_project]
     pub struct WebSocketStream<'a> {
@@ -430,6 +430,8 @@ mod websocket {
         ) -> Self {
             let mut buffer = BytesMut::new();
             if let Some(data) = early_data {
+                console_log!("early data: {}, {:?}", data.len(), data);
+
                 buffer.put_slice(&data)
             }
 
@@ -456,6 +458,7 @@ mod websocket {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Some(Ok(WebsocketEvent::Message(msg)))) => {
                         if let Some(data) = msg.bytes() {
+                            console_log!("Received message data: {}, {:?}", data.len(), data);
                             this.buffer.put_slice(&data);
                         };
                         continue;
@@ -487,10 +490,11 @@ mod websocket {
         }
 
         fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<()>> {
-            if let Err(e) = self.ws.close(None, Some("normal close")) {
-                return Poll::Ready(Err(Error::new(ErrorKind::Other, e.to_string())));
-            }
+            // if let Err(e) = self.ws.close(None, Some("normal close")) {
+            //     return Poll::Ready(Err(Error::new(ErrorKind::Other, e.to_string())));
+            // }
 
+            console_log!("poll_shutdown");
             Poll::Ready(Ok(()))
         }
     }
