@@ -10,7 +10,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     let user_id = parse_user_id(&user_id);
 
     // get proxy ip list
-    let proxy_ip = env.secret("PROXY_IP")?.to_string();
+    let proxy_ip = env.var("PROXY_IP")?.to_string();
     let proxy_ip = proxy_ip
         .split_ascii_whitespace()
         .filter(|s| !s.is_empty())
@@ -19,7 +19,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
 
     // better disguising;
     let fallback_site = env
-        .secret("FALLBACK_SITE")
+        .var("FALLBACK_SITE")
         .unwrap_or(JsValue::from_str("").into())
         .to_string();
     let should_fallback = req
@@ -211,10 +211,19 @@ mod proxy {
     async fn process_tcp_outbound(
         client_socket: &mut WebSocketStream<'_>,
         target: &str,
-        port: u16,
+        remote_port: u16,
     ) -> Result<()> {
+        // the target could be a hostname with an optional port, split the target into host and port
+        let (target, remote_port) = if let Some((host, port)) = target.split_once(':') {
+            (host, port.parse::<u16>().unwrap_or(remote_port))
+        } else {
+            (target, remote_port)
+        };
+
+        console_log!("connect to remote: {}:{}", target, remote_port);
+
         // connect to remote socket
-        let mut remote_socket = Socket::builder().connect(target, port).map_err(|e| {
+        let mut remote_socket = Socket::builder().connect(target, remote_port).map_err(|e| {
             Error::new(
                 ErrorKind::ConnectionAborted,
                 format!("connect to remote failed: {}", e),
