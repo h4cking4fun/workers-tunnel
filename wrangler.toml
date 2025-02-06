@@ -11,3 +11,5 @@ head_sampling_rate = 1
 
 [vars]
 SHOW_URI = "true"
+PROXY_IP = ""
+FALLBACK_SITE = ""

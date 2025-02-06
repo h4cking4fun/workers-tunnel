@@ -26,6 +26,8 @@ jobs:
                   apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
                   secrets: |
                     USER_ID
+
+                  vars: |
                     PROXY_IP
                     FALLBACK_SITE
               env:
