@@ -13,3 +13,6 @@ head_sampling_rate = 1
 SHOW_URI = "true"
 PROXY_IP = ""
 FALLBACK_SITE = ""
+
+[env.dev.vars]
+SHOW_URI = "true"

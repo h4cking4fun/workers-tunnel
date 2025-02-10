@@ -1,0 +1,40 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        name: Deploy
+        steps:
+            - uses: actions/checkout@v4
+            - name: Setup Node.js
+              uses: actions/setup-node@v3
+              with:
+                  node-version: "22"
+            - name: Install modules
+              run: npm install
+            - uses: actions-rust-lang/setup-rust-toolchain@v1
+              with:
+                  toolchain: stable
+                  target: wasm32-unknown-unknown
+            - run: cargo install cargo-generate
+            - name: Deploy
+              uses: cloudflare/wrangler-action@v3
+              with:
+                  environment: dev
+                  apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  secrets: |
+                    USER_ID
+
+                  vars: |
+                    PROXY_IP
+                    FALLBACK_SITE
+              env:
+                USER_ID: ${{ secrets.USER_ID }}
+                PROXY_IP: ${{ secrets.PROXY_IP }}
+                FALLBACK_SITE: ${{ secrets.FALLBACK_SITE }}
+
