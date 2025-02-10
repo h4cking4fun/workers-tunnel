@@ -93,8 +93,8 @@ mod proxy {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     use crate::ext::StreamExt;
-    use crate::protocol;
     use crate::websocket::WebSocketStream;
+    use crate::{protocol, socks5};
     use base64::{decode_config, URL_SAFE_NO_PAD};
     use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt};
     use worker::*;
@@ -134,7 +134,7 @@ mod proxy {
     pub async fn run_tunnel(
         mut client_socket: WebSocketStream<'_>,
         user_id: Vec<u8>,
-        proxy_ip: Vec<String>,
+        _proxy_ip: Vec<String>,
     ) -> Result<()> {
         // read version
         if client_socket.read_u8().await? != protocol::VERSION {
@@ -178,7 +178,7 @@ mod proxy {
         match network_type {
             protocol::NETWORK_TYPE_TCP => {
                 // try to connect to remote
-                for target in [vec![remote_addr], proxy_ip].concat() {
+                for target in [vec![remote_addr]].concat() {
                     match process_tcp_outbound(&mut client_socket, &target, remote_port).await {
                         Ok(_) => {
                             // normal closed
@@ -214,29 +214,33 @@ mod proxy {
         remote_port: u16,
     ) -> Result<()> {
         // the target could be a hostname with an optional port, split the target into host and port
-        let (target, remote_port) = if let Some((host, port)) = target.split_once(':') {
-            (host, port.parse::<u16>().unwrap_or(remote_port))
-        } else {
-            (target, remote_port)
-        };
+        // let (target, remote_port) = if let Some((host, port)) = target.split_once(':') {
+        //     (host, port.parse::<u16>().unwrap_or(remote_port))
+        // } else {
+        //     (target, remote_port)
+        // };
 
         console_log!("connect to remote: {}:{}", target, remote_port);
 
         // connect to remote socket
-        let mut remote_socket = Socket::builder().connect(target, remote_port).map_err(|e| {
-            Error::new(
-                ErrorKind::ConnectionAborted,
-                format!("connect to remote failed: {}", e),
-            )
-        })?;
+        // let mut remote_socket = Socket::builder()
+        //     .connect(target, remote_port)
+        //     .map_err(|e| {
+        //         Error::new(
+        //             ErrorKind::ConnectionAborted,
+        //             format!("connect to remote failed: {}", e),
+        //         )
+        //     })?;
 
         // check remote socket
-        remote_socket.opened().await.map_err(|e| {
-            Error::new(
-                ErrorKind::ConnectionReset,
-                format!("remote socket not opened: {}", e),
-            )
-        })?;
+        // remote_socket.opened().await.map_err(|e| {
+        //     Error::new(
+        //         ErrorKind::ConnectionReset,
+        //         format!("remote socket not opened: {}", e),
+        //     )
+        // })?;
+
+        let mut remote_socket = socks5::connect(target, remote_port).await;
 
         // send response header
         client_socket
@@ -250,14 +254,15 @@ mod proxy {
             })?;
 
         // forward data
-        copy_bidirectional(client_socket, &mut remote_socket)
-            .await
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::ConnectionAborted,
-                    format!("forward data between client and remote failed: {}", e),
-                )
-            })?;
+        if let Err(err) = copy_bidirectional(client_socket, &mut remote_socket).await {
+            console_error!("forward data between client and remote failed: {}", err);
+        }
+        // .map_err(|e| {
+        //     Error::new(
+        //         ErrorKind::ConnectionAborted,
+        //         format!("forward data between client and remote failed: {}", e),
+        //     )
+        // })?;
 
         Ok(())
     }
@@ -332,6 +337,101 @@ mod proxy {
             client_socket.write_u16(data.len() as u16).await?;
             client_socket.write_all(&data).await?;
         }
+    }
+}
+
+mod socks5 {
+    use bytes::BufMut;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use worker::{console_log, Socket};
+
+    pub async fn connect(hostname: &str, port: u16) -> Socket {
+        let socks_server = "34.94.125.42";
+        let socks_port = 18444 as u16;
+
+        let mut socket = Socket::builder()
+            .connect(socks_server, socks_port)
+            .expect("connect failed");
+
+        socket.opened().await.expect("socket not opened");
+
+        // socks5 initial handshake
+        // VER, NMETHODS, METHODS
+        socket
+            .write(&[5, 1, 2])
+            .await
+            .expect("write handshake failed");
+
+        // read socks5 response
+        // VER, METHOD
+        let mut buffer = [0u8; 2];
+        socket
+            .read_exact(&mut buffer)
+            .await
+            .expect("read handshake response failed");
+
+        console_log!("socks5 handshake response: {:?}", buffer);
+
+        // TODO: check socks5 response
+
+        let username = "55b59f52-e62d-400e-a027-38a00363b473";
+        let password = "55b59f52-e62d-400e-a027-38a00363b473";
+        // socks5 auth handshake
+        // VER, ULEN, UNAME, PLEN, PASSWD
+        let mut auth = vec![];
+        auth.put_u8(1);
+        auth.put_u8(username.len() as u8);
+        auth.put_slice(username.as_bytes());
+        auth.put_u8(password.len() as u8);
+        auth.put_slice(password.as_bytes());
+        socket
+            .write(&auth)
+            .await
+            .expect("write auth handshake failed");
+
+        console_log!("socks5 auth handshake: {:?}", auth);
+
+        // read socks5 auth response
+        // VER, STATUS
+        let mut buffer = [0u8; 2];
+        socket
+            .read_exact(&mut buffer)
+            .await
+            .expect("read auth response failed");
+
+        console_log!("socks5 auth response: {:?}", buffer);
+
+        // TODO: check socks5 auth response
+
+        // socks5 connect request
+        // VER, CMD, RSV, ATYP, DST.ADDR, DST.PORT
+        let mut request = vec![];
+        request.put_u8(5);
+        request.put_u8(1);
+        request.put_u8(0);
+        request.put_u8(3);
+        request.put_u8(hostname.len() as u8);
+        request.put_slice(hostname.as_bytes());
+        request.put_u16(port);
+
+        socket
+            .write(&request)
+            .await
+            .expect("write connect request failed");
+
+        // read socks5 connect response
+        // VER, REP, RSV, ATYP, BND.ADDR, BND.PORT
+        let mut buffer = vec![];
+        socket
+            .read_to_end(&mut buffer)
+            .await
+            .expect("read connect response failed");
+
+        console_log!("socks5 connect response: {:?}", buffer);
+
+        // TODO: check socks5 connect response
+
+        socket
     }
 }
 
