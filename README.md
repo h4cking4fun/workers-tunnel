@@ -8,11 +8,16 @@ It is recommended to use Xray as the tunnel client.
 
 <https://github.com/XTLS/Xray-core>
 
-Use the following rules to split traffic by file and route Cloudflare IP directly.
+For the full architecture, routing behavior, client configuration, and fallback
+SOCKS5 server setup, see [Worker Tunnel Guide](docs/worker-tunnel-guide.md).
+
+Use client routing rules to avoid sending unnecessary traffic through the Worker.
 
 <https://github.com/Loyalsoldier/v2ray-rules-dat>
 
-Due to the limitations of Cloudflare Workers, UDP proxy is not supported, and it is not possible to use proxy to connect to Cloudflare's IP addresses. It is recommended to use the following routing configuration to establish a direct connection to Cloudflare's IP addresses.
+Cloudflare Workers cannot open arbitrary UDP sockets directly. UDP/53 is handled
+through DNS-over-HTTPS, and non-DNS UDP can be forwarded through a SOCKS5
+fallback server that supports sing-box UDP-over-TCP v2.
 
 Replace the domain `your.domain.workers.dev` in the following configuration with your Cloudflare Workers domain.
 
