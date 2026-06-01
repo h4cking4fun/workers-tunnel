@@ -120,7 +120,16 @@ pub(crate) async fn process_udp_outbound(
 
         match open_uot_socket(outbound_target, request).await {
             Ok(remote_socket) => {
-                return relay_uot_outbound(client_socket, remote_socket, &log_target).await;
+                if debug_log {
+                    console_log!(
+                        "uot connected: {} -> {}:{}",
+                        log_target,
+                        request.remote_addr,
+                        request.remote_port
+                    );
+                }
+                return relay_uot_outbound(client_socket, remote_socket, &log_target, debug_log)
+                    .await;
             }
             Err(err) if err.kind() == ErrorKind::ConnectionRefused => {
                 last_error = Some(err);
@@ -152,16 +161,30 @@ pub(crate) async fn process_xudp_outbound(
     for outbound_target in proxy_ip.iter().filter(|target| target.is_socks5()) {
         let log_target = outbound_target.log_target(first_datagram.destination.port);
         if debug_log {
-            console_log!("connect XUDP via UoT: {}", log_target);
+            console_log!(
+                "xudp route selected: {} -> {}:{}",
+                log_target,
+                first_datagram.destination.host,
+                first_datagram.destination.port
+            );
         }
 
         match open_uot_destination(outbound_target, &first_datagram.destination).await {
             Ok(remote_socket) => {
+                if debug_log {
+                    console_log!(
+                        "uot connected: {} -> {}:{}",
+                        log_target,
+                        first_datagram.destination.host,
+                        first_datagram.destination.port
+                    );
+                }
                 return relay_xudp_outbound(
                     client_socket,
                     remote_socket,
                     first_datagram,
                     &log_target,
+                    debug_log,
                 )
                 .await;
             }
@@ -266,6 +289,7 @@ async fn relay_uot_outbound(
     client_socket: &mut WebSocketStream<'_>,
     mut remote_socket: Socket,
     log_target: &str,
+    debug_log: bool,
 ) -> Result<()> {
     client_socket
         .write_all(&protocol::RESPONSE)
@@ -293,7 +317,16 @@ async fn relay_uot_outbound(
     tokio::pin!(c2r);
 
     let r2c = async {
+        let mut first_response_logged = false;
         while let Some(packet) = crate::uot::read_datagram(&mut rr, MAX_UDP_PACKET).await? {
+            if debug_log && !first_response_logged {
+                console_log!(
+                    "uot first response: {} bytes via {}",
+                    packet.len(),
+                    log_target
+                );
+                first_response_logged = true;
+            }
             crate::uot::write_datagram(&mut cw, &packet).await?;
             cw.flush().await?;
         }
@@ -335,6 +368,7 @@ async fn relay_xudp_outbound(
     mut remote_socket: Socket,
     first_datagram: crate::xudp::Datagram,
     log_target: &str,
+    debug_log: bool,
 ) -> Result<()> {
     client_socket
         .write_all(&protocol::RESPONSE)
@@ -383,11 +417,22 @@ async fn relay_xudp_outbound(
 
     let r2c_target = Arc::clone(&latest_response_target);
     let r2c = async {
+        let mut first_response_logged = false;
         while let Some(packet) = crate::uot::read_datagram(&mut rr, MAX_UDP_PACKET).await? {
             let (session_id, destination) = r2c_target
                 .lock()
                 .map(|target| target.clone())
                 .map_err(|_| Error::other("XUDP response target lock poisoned"))?;
+            if debug_log && !first_response_logged {
+                console_log!(
+                    "xudp first response: {} bytes from {}:{} via {}",
+                    packet.len(),
+                    destination.host,
+                    destination.port,
+                    log_target
+                );
+                first_response_logged = true;
+            }
             crate::xudp::write_datagram(&mut cw, session_id, &destination, &packet).await?;
             cw.flush().await?;
         }
