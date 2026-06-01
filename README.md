@@ -122,6 +122,9 @@ PROXY_IP="1.2.3.4 1.2.3.4:443 socks5://proxy.example.com:1080 socks5://user:pass
 For GitHub Actions deployment, store `USER_ID` and `PROXY_IP` as GitHub
 repository secrets. The workflow passes them to Cloudflare as Worker variables.
 
+Set `DEBUG_LOG=true` to log each outbound connection attempt. It is disabled by
+default so normal tunnel traffic does not flood Worker logs.
+
 ## Setup
 
 To create a `my-project` directory using this template, run:

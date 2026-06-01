@@ -139,7 +139,11 @@ async fn read_connect_response(socket: &mut Socket) -> Result<()> {
     if header[1] != 0x00 {
         return Err(Error::new(
             ErrorKind::ConnectionRefused,
-            format!("SOCKS5 connect request failed with status {}", header[1]),
+            format!(
+                "SOCKS5 connect request failed with status {} ({})",
+                header[1],
+                reply_status_message(header[1])
+            ),
         ));
     }
 
@@ -170,9 +174,24 @@ async fn read_connect_response(socket: &mut Socket) -> Result<()> {
     Ok(())
 }
 
+fn reply_status_message(status: u8) -> &'static str {
+    match status {
+        0x00 => "succeeded",
+        0x01 => "general SOCKS server failure",
+        0x02 => "connection not allowed by ruleset",
+        0x03 => "network unreachable",
+        0x04 => "host unreachable",
+        0x05 => "connection refused",
+        0x06 => "TTL expired",
+        0x07 => "command not supported",
+        0x08 => "address type not supported",
+        _ => "unknown status",
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::encode_address;
+    use super::{encode_address, reply_status_message};
 
     #[test]
     fn encodes_domain_destination() {
@@ -204,5 +223,12 @@ mod tests {
             ]
             .concat()
         );
+    }
+
+    #[test]
+    fn decodes_reply_status() {
+        assert_eq!(reply_status_message(0x01), "general SOCKS server failure");
+        assert_eq!(reply_status_message(0x05), "connection refused");
+        assert_eq!(reply_status_message(0xff), "unknown status");
     }
 }

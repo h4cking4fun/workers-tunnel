@@ -28,7 +28,9 @@ jobs:
                     USER_ID
                     PROXY_IP
                     FALLBACK_SITE
+                    DEBUG_LOG
               env:
                 USER_ID: ${{ secrets.USER_ID }}
                 PROXY_IP: ${{ secrets.PROXY_IP }}
                 FALLBACK_SITE: ${{ secrets.FALLBACK_SITE }}
+                DEBUG_LOG: ${{ vars.DEBUG_LOG || 'false' }}

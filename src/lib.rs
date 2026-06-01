@@ -46,6 +46,10 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
     let proxy_ip = parse_outbound_targets(&proxy_ip).map_err(|err| {
         worker::Error::RustError(format!("invalid PROXY_IP configuration: {}", err))
     })?;
+    let debug_log = env
+        .var("DEBUG_LOG")
+        .map(|value| value.to_string().parse().unwrap_or(false))
+        .unwrap_or(false);
 
     let early_data = req.headers().get("sec-websocket-protocol")?;
     let early_data = parse_early_data(early_data)?;
@@ -65,7 +69,7 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
 
         let socket = WebSocketStream::new(&server, events, early_data);
 
-        if let Err(err) = run_tunnel(socket, user_id, &proxy_ip).await {
+        if let Err(err) = run_tunnel(socket, user_id, &proxy_ip, debug_log).await {
             console_error!("error: {}", err);
             _ = server.close(Some(1003), Some("invalid request"));
         }
@@ -181,6 +185,7 @@ mod proxy {
         mut client_socket: WebSocketStream<'_>,
         user_id: [u8; 16],
         proxy_ip: &[OutboundTarget],
+        debug_log: bool,
     ) -> Result<()> {
         let request = tokio::select! {
             result = read_tunnel_request(&mut client_socket, &user_id) => result?,
@@ -202,7 +207,9 @@ mod proxy {
                 };
 
                 for target in std::iter::once(&original_target).chain(proxy_ip.iter()) {
-                    match process_tcp_outbound(&mut client_socket, target, &request).await {
+                    match process_tcp_outbound(&mut client_socket, target, &request, debug_log)
+                        .await
+                    {
                         Ok(_) => return Ok(()),
                         Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
                             last_error = Some(e);
@@ -283,9 +290,12 @@ mod proxy {
         client_socket: &mut WebSocketStream<'_>,
         outbound_target: &OutboundTarget,
         request: &TunnelRequest,
+        debug_log: bool,
     ) -> Result<()> {
         let log_target = outbound_target.log_target(request.remote_port);
-        console_log!("connect to remote: {}", log_target);
+        if debug_log {
+            console_log!("connect to remote: {}", log_target);
+        }
 
         let mut remote_socket = open_outbound_socket(outbound_target, request).await?;
 
