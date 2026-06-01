@@ -89,8 +89,10 @@ mod protocol {
 }
 
 mod proxy {
+    use std::collections::HashMap;
     use std::io::{Error, ErrorKind, Result};
     use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use crate::ext::ReadStringExt;
@@ -104,10 +106,13 @@ mod proxy {
     const COPY_BUF_SIZE: usize = 32 * 1024;
 
     const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+    const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
     const RELAY_TIMEOUT: Duration = Duration::from_secs(900);
     const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
     const DNS_TIMEOUT: Duration = Duration::from_secs(10);
+    const DIRECT_FAILURE_CACHE_TTL_MS: u64 = 30 * 60 * 1000;
+
+    static DIRECT_FAILURE_CACHE: OnceLock<Mutex<DirectFailureCache>> = OnceLock::new();
 
     struct TunnelRequest {
         network_type: u8,
@@ -134,6 +139,15 @@ mod proxy {
             match self {
                 Self::Direct { host, port } => format!("{}:{}", host, port.unwrap_or(default_port)),
                 Self::Socks5 { host, port, .. } => format!("socks5://{}:{}", host, port),
+            }
+        }
+
+        fn direct_cache_key(&self, default_port: u16) -> Option<String> {
+            match self {
+                Self::Direct { host, port } => {
+                    Some(format!("{}:{}", host, port.unwrap_or(default_port)))
+                }
+                Self::Socks5 { .. } => None,
             }
         }
     }
@@ -201,17 +215,39 @@ mod proxy {
         match request.network_type {
             protocol::NETWORK_TYPE_TCP => {
                 let mut last_error = None;
+                let use_direct_failure_cache = !proxy_ip.is_empty();
                 let original_target = OutboundTarget::Direct {
                     host: request.remote_addr.clone(),
                     port: Some(request.remote_port),
                 };
 
                 for target in std::iter::once(&original_target).chain(proxy_ip.iter()) {
+                    let direct_cache_key = target.direct_cache_key(request.remote_port);
+                    if use_direct_failure_cache {
+                        if let Some(cache_key) = direct_cache_key.as_deref() {
+                            if is_direct_failure_cached(cache_key) {
+                                if debug_log {
+                                    console_log!("skip cached direct target: {}", cache_key);
+                                }
+                                last_error = Some(Error::new(
+                                    ErrorKind::ConnectionRefused,
+                                    format!("cached direct connect failure: {}", cache_key),
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+
                     match process_tcp_outbound(&mut client_socket, target, &request, debug_log)
                         .await
                     {
                         Ok(_) => return Ok(()),
                         Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
+                            if use_direct_failure_cache {
+                                if let Some(cache_key) = direct_cache_key {
+                                    cache_direct_failure(&cache_key);
+                                }
+                            }
                             last_error = Some(e);
                             continue;
                         }
@@ -223,9 +259,7 @@ mod proxy {
                     Error::new(ErrorKind::ConnectionRefused, "no target to connect")
                 }))
             }
-            protocol::NETWORK_TYPE_UDP => {
-                process_udp_outbound(&mut client_socket, request.remote_port).await
-            }
+            protocol::NETWORK_TYPE_UDP => process_udp_outbound(&mut client_socket, &request).await,
             unknown => Err(Error::new(
                 ErrorKind::InvalidData,
                 format!("unsupported network type: {}", unknown),
@@ -358,7 +392,7 @@ mod proxy {
                 result
             }
             _ = Delay::from(RELAY_TIMEOUT) => {
-                console_log!("relay timed out: {}", log_target);
+                console_log!("relay idle timeout: {}", log_target);
                 return Ok(());
             }
         };
@@ -372,12 +406,20 @@ mod proxy {
 
     async fn process_udp_outbound(
         client_socket: &mut WebSocketStream<'_>,
-        port: u16,
+        request: &TunnelRequest,
     ) -> Result<()> {
-        if port != 53 {
+        if request.remote_port != 53 {
+            console_log!(
+                "unsupported udp proxy request: {}:{}",
+                request.remote_addr,
+                request.remote_port
+            );
             return Err(Error::new(
                 ErrorKind::InvalidData,
-                "not supported udp proxy yet",
+                format!(
+                    "not supported udp proxy yet: {}:{}",
+                    request.remote_addr, request.remote_port
+                ),
             ));
         }
 
@@ -489,7 +531,7 @@ mod proxy {
             )
         })?;
 
-        wait_socket_opened(socket, CONNECT_TIMEOUT, "remote socket not opened").await
+        wait_socket_opened(socket, DIRECT_CONNECT_TIMEOUT, "remote socket not opened").await
     }
 
     async fn wait_socket_opened(
@@ -682,9 +724,53 @@ mod proxy {
         Ok(())
     }
 
+    fn is_direct_failure_cached(cache_key: &str) -> bool {
+        let now_ms = Date::now().as_millis();
+        direct_failure_cache()
+            .lock()
+            .map(|mut cache| cache.is_cached(cache_key, now_ms))
+            .unwrap_or(false)
+    }
+
+    fn cache_direct_failure(cache_key: &str) {
+        let now_ms = Date::now().as_millis();
+        if let Ok(mut cache) = direct_failure_cache().lock() {
+            cache.record_failure(cache_key, now_ms, DIRECT_FAILURE_CACHE_TTL_MS);
+        }
+    }
+
+    fn direct_failure_cache() -> &'static Mutex<DirectFailureCache> {
+        DIRECT_FAILURE_CACHE.get_or_init(|| Mutex::new(DirectFailureCache::default()))
+    }
+
+    #[derive(Default)]
+    struct DirectFailureCache {
+        expires_at_by_target: HashMap<String, u64>,
+    }
+
+    impl DirectFailureCache {
+        fn is_cached(&mut self, cache_key: &str, now_ms: u64) -> bool {
+            match self.expires_at_by_target.get(cache_key).copied() {
+                Some(expires_at) if expires_at > now_ms => true,
+                Some(_) => {
+                    self.expires_at_by_target.remove(cache_key);
+                    false
+                }
+                None => false,
+            }
+        }
+
+        fn record_failure(&mut self, cache_key: &str, now_ms: u64, ttl_ms: u64) {
+            self.expires_at_by_target
+                .insert(cache_key.to_string(), now_ms.saturating_add(ttl_ms));
+        }
+    }
+
     #[cfg(test)]
     mod tests {
-        use super::{parse_outbound_target, parse_outbound_targets, OutboundTarget};
+        use super::{
+            parse_outbound_target, parse_outbound_targets, DirectFailureCache, OutboundTarget,
+        };
 
         #[test]
         fn parses_direct_targets() {
@@ -743,6 +829,33 @@ mod proxy {
                     .len(),
                 2
             );
+        }
+
+        #[test]
+        fn caches_new_direct_failures() {
+            let mut cache = DirectFailureCache::default();
+            cache.record_failure("example.com:443", 1000, 5000);
+
+            assert!(cache.is_cached("example.com:443", 1001));
+        }
+
+        #[test]
+        fn expires_cached_direct_failures() {
+            let mut cache = DirectFailureCache::default();
+            cache.record_failure("example.com:443", 1000, 5000);
+
+            assert!(!cache.is_cached("example.com:443", 6000));
+            assert!(!cache.is_cached("example.com:443", 6001));
+        }
+
+        #[test]
+        fn direct_failure_cache_key_includes_host_and_port() {
+            let mut cache = DirectFailureCache::default();
+            cache.record_failure("example.com:443", 1000, 5000);
+
+            assert!(cache.is_cached("example.com:443", 1001));
+            assert!(!cache.is_cached("example.com:8443", 1001));
+            assert!(!cache.is_cached("other.example.com:443", 1001));
         }
     }
 }

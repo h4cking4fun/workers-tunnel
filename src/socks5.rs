@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use worker::{Delay, Socket};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SOCKS5_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn connect(
     proxy_host: &str,
@@ -56,7 +56,7 @@ async fn wait_socket_opened(socket: Socket, error_message: &'static str) -> Resu
             })?;
             Ok(socket)
         }
-        _ = Delay::from(CONNECT_TIMEOUT) => {
+        _ = Delay::from(SOCKS5_CONNECT_TIMEOUT) => {
             Err(Error::new(ErrorKind::ConnectionRefused, "connect to SOCKS5 proxy timed out"))
         }
     }
