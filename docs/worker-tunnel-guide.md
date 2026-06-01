@@ -317,8 +317,27 @@ Example sing-box backend:
 Example Caddy reverse proxy:
 
 ```caddyfile
-backend.example.com {
-  reverse_proxy /vless 127.0.0.1:10000
+{
+  admin off
+  auto_https disable_redirects
+}
+
+http://backend.example.com {
+  @vless path /vless
+  handle @vless {
+    reverse_proxy 127.0.0.1:10000
+  }
+
+  handle {
+    redir https://{host}{uri} 308
+  }
+}
+
+https://backend.example.com {
+  @vless path /vless
+  handle @vless {
+    reverse_proxy 127.0.0.1:10000
+  }
 }
 ```
 
@@ -333,6 +352,8 @@ Operational notes:
 - Do not configure client WebSocket early data on `/relay`; use `path: /relay`, not `/relay?ed=512`.
 - The Worker does not authenticate `/relay` traffic. The backend VLESS server must validate the UUID.
 - `RELAY_BACKEND_URL` logs are sanitized before printing, but avoid embedding credentials in the backend URL.
+- The Worker backend WebSocket is a Fetch upgrade subrequest. Some backends receive it on HTTP with `X-Forwarded-Proto: https`; make `/vless` bypass HTTP-to-HTTPS redirects before any fallback `redir`.
+- In Caddy, put the proxy and fallback redirect in separate `handle` blocks. A bare `redir` beside `handle /vless` is not mutually exclusive and can still redirect `/vless`.
 - Use backend logs to confirm VLESS inbound and multiplex sessions.
 
 ## Debugging
