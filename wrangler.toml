@@ -10,6 +10,7 @@ enabled = true
 head_sampling_rate = 1
 
 [vars]
+USER_ID = ""
 SHOW_URI = "true"
 PROXY_IP = ""
 FALLBACK_SITE = ""

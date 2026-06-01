@@ -24,10 +24,8 @@ jobs:
               uses: cloudflare/wrangler-action@v3
               with:
                   apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-                  secrets: |
-                    USER_ID
-
                   vars: |
+                    USER_ID
                     PROXY_IP
                     FALLBACK_SITE
               env:

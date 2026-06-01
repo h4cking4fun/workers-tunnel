@@ -6,7 +6,7 @@ mod socks5;
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
-    let uuid_str = env.secret("USER_ID")?.to_string();
+    let uuid_str = env.var("USER_ID")?.to_string();
 
     let is_websocket = req
         .headers()

@@ -104,10 +104,11 @@ Please refer to the following documentation for development and deployment.
 
 <https://developers.cloudflare.com/workers/runtime-apis/webassembly/rust/>
 
-**Important**: Before deployment, configure `USER_ID` as a Worker secret.
+**Important**: Before deployment, configure `USER_ID` as a Worker variable.
 
-```sh
-wrangler secret put USER_ID
+```toml
+[vars]
+USER_ID = "c55ba35f-12f6-436e-a451-4ce982c4ec1c"
 ```
 
 `PROXY_IP` is an optional whitespace-separated outbound fallback list. Plain
@@ -118,8 +119,8 @@ original requested destination through that SOCKS5 proxy.
 PROXY_IP="1.2.3.4 1.2.3.4:443 socks5://proxy.example.com:1080 socks5://user:pass@proxy.example.com:1080"
 ```
 
-For GitHub Actions deployment, store `PROXY_IP` as a GitHub repository secret.
-The workflow passes it to Cloudflare as a Worker variable.
+For GitHub Actions deployment, store `USER_ID` and `PROXY_IP` as GitHub
+repository secrets. The workflow passes them to Cloudflare as Worker variables.
 
 ## Setup
 
