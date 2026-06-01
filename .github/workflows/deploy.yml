@@ -29,10 +29,10 @@ jobs:
                     PROXY_IP
                     FALLBACK_SITE
                     DEBUG_LOG
-                    MUX_BACKEND_URL
+                    RELAY_BACKEND_URL
               env:
                 USER_ID: ${{ secrets.USER_ID }}
                 PROXY_IP: ${{ secrets.PROXY_IP }}
                 FALLBACK_SITE: ${{ secrets.FALLBACK_SITE }}
                 DEBUG_LOG: ${{ vars.DEBUG_LOG || 'false' }}
-                MUX_BACKEND_URL: ${{ secrets.MUX_BACKEND_URL }}
+                RELAY_BACKEND_URL: ${{ secrets.RELAY_BACKEND_URL }}

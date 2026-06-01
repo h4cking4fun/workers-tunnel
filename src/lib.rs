@@ -1,12 +1,12 @@
 use crate::config::{parse_early_data, parse_outbound_targets, parse_user_id};
-use crate::mux::{is_mux_path, run_mux_tunnel};
+use crate::passthrough::{is_relay_path, run_passthrough_tunnel};
 use crate::proxy::run_tunnel;
 use crate::websocket::WebSocketStream;
 use worker::*;
 
 mod config;
 mod ext;
-mod mux;
+mod passthrough;
 mod protocol;
 mod proxy;
 mod relay;
@@ -53,9 +53,9 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
         .map(|value| value.to_string().parse().unwrap_or(false))
         .unwrap_or(false);
 
-    if is_mux_path(&path) {
+    if is_relay_path(&path) {
         let backend_url = env
-            .var("MUX_BACKEND_URL")
+            .var("RELAY_BACKEND_URL")
             .map(|value| value.to_string())
             .unwrap_or_default();
 
@@ -66,16 +66,16 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
             let events = match server.events() {
                 Ok(events) => events,
                 Err(err) => {
-                    console_error!("error: could not open mux websocket stream: {}", err);
+                    console_error!("error: could not open relay websocket stream: {}", err);
                     _ = server.close(Some(1011), Some("websocket stream error"));
                     return;
                 }
             };
 
             let socket = WebSocketStream::new(&server, events, None);
-            if let Err(err) = run_mux_tunnel(socket, backend_url, debug_log).await {
+            if let Err(err) = run_passthrough_tunnel(socket, backend_url, debug_log).await {
                 console_error!("error: {}", err);
-                _ = server.close(Some(1011), Some("mux backend error"));
+                _ = server.close(Some(1011), Some("relay backend error"));
             }
         });
 

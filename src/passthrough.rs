@@ -7,14 +7,14 @@ use worker::*;
 use crate::websocket::WebSocketStream;
 
 const COPY_BUF_SIZE: usize = 32 * 1024;
-const MUX_RELAY_TIMEOUT: Duration = Duration::from_secs(900);
-const MUX_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const RELAY_TIMEOUT: Duration = Duration::from_secs(900);
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) fn is_mux_path(path: &str) -> bool {
-    path == "/mux"
+pub(crate) fn is_relay_path(path: &str) -> bool {
+    path == "/relay"
 }
 
-pub(crate) async fn run_mux_tunnel(
+pub(crate) async fn run_passthrough_tunnel(
     mut client_socket: WebSocketStream<'_>,
     backend_url: String,
     debug_log: bool,
@@ -22,13 +22,13 @@ pub(crate) async fn run_mux_tunnel(
     if backend_url.trim().is_empty() {
         return Err(Error::new(
             ErrorKind::InvalidInput,
-            "MUX_BACKEND_URL is required for /mux",
+            "RELAY_BACKEND_URL is required for /relay",
         ));
     }
 
     let log_url = sanitize_backend_url(&backend_url);
     if debug_log {
-        console_log!("mux backend connect: {}", log_url);
+        console_log!("relay backend connect: {}", log_url);
     }
 
     let backend_url = parse_backend_url(&backend_url)?;
@@ -43,14 +43,14 @@ pub(crate) async fn run_mux_tunnel(
         .map_err(|err| Error::other(err.to_string()))?;
 
     if debug_log {
-        console_log!("mux backend connected: {}", log_url);
+        console_log!("relay backend connected: {}", log_url);
     }
 
     let mut backend_socket = WebSocketStream::new(&backend, backend_events, None);
-    relay_mux(&mut client_socket, &mut backend_socket, &log_url, debug_log).await
+    relay_stream(&mut client_socket, &mut backend_socket, &log_url, debug_log).await
 }
 
-async fn relay_mux(
+async fn relay_stream(
     client_socket: &mut WebSocketStream<'_>,
     backend_socket: &mut WebSocketStream<'_>,
     log_url: &str,
@@ -92,29 +92,29 @@ async fn relay_mux(
         result = &mut c2b => {
             tokio::select! {
                 _ = &mut b2c => {}
-                _ = Delay::from(MUX_DRAIN_TIMEOUT) => {}
+                _ = Delay::from(DRAIN_TIMEOUT) => {}
             };
             result
         }
         result = &mut b2c => {
             tokio::select! {
                 _ = &mut c2b => {}
-                _ = Delay::from(MUX_DRAIN_TIMEOUT) => {}
+                _ = Delay::from(DRAIN_TIMEOUT) => {}
             };
             result
         }
-        _ = Delay::from(MUX_RELAY_TIMEOUT) => {
+        _ = Delay::from(RELAY_TIMEOUT) => {
             if debug_log {
-                console_log!("mux relay idle timeout: {}", log_url);
+                console_log!("relay stream idle timeout: {}", log_url);
             }
             return Ok(());
         }
     };
 
     if let Err(err) = result {
-        console_log!("mux relay ended: {} - {}", log_url, err);
+        console_log!("relay stream ended: {} - {}", log_url, err);
     } else if debug_log {
-        console_log!("mux relay ended: {}", log_url);
+        console_log!("relay stream ended: {}", log_url);
     }
 
     Ok(())
@@ -122,7 +122,7 @@ async fn relay_mux(
 
 pub(crate) fn sanitize_backend_url(value: &str) -> String {
     let Ok(mut url) = Url::parse(value) else {
-        return "<invalid mux backend url>".to_string();
+        return "<invalid relay backend url>".to_string();
     };
     let _ = url.set_username("");
     let _ = url.set_password(None);
@@ -133,13 +133,13 @@ fn parse_backend_url(value: &str) -> Result<Url> {
     let url = Url::parse(value).map_err(|err| {
         Error::new(
             ErrorKind::InvalidInput,
-            format!("invalid MUX_BACKEND_URL: {}", err),
+            format!("invalid RELAY_BACKEND_URL: {}", err),
         )
     })?;
     if url.scheme() != "wss" {
         return Err(Error::new(
             ErrorKind::InvalidInput,
-            "MUX_BACKEND_URL must use wss://",
+            "RELAY_BACKEND_URL must use wss://",
         ));
     }
     Ok(url)
@@ -147,14 +147,15 @@ fn parse_backend_url(value: &str) -> Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_mux_path, parse_backend_url, sanitize_backend_url};
+    use super::{is_relay_path, parse_backend_url, sanitize_backend_url};
 
     #[test]
-    fn mux_path_requires_exact_match() {
-        assert!(is_mux_path("/mux"));
-        assert!(!is_mux_path("/mux/"));
-        assert!(!is_mux_path("/ws"));
-        assert!(!is_mux_path("/"));
+    fn relay_path_requires_exact_match() {
+        assert!(is_relay_path("/relay"));
+        assert!(!is_relay_path("/relay/"));
+        assert!(!is_relay_path("/mux"));
+        assert!(!is_relay_path("/ws"));
+        assert!(!is_relay_path("/"));
     }
 
     #[test]
@@ -169,7 +170,7 @@ mod tests {
     fn sanitized_backend_url_handles_invalid_values() {
         assert_eq!(
             sanitize_backend_url("not a url"),
-            "<invalid mux backend url>"
+            "<invalid relay backend url>"
         );
     }
 

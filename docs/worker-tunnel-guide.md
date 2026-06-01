@@ -13,8 +13,8 @@ flowchart LR
     Worker -->|"TCP fallback via SOCKS5 CONNECT"| Socks["Fallback SOCKS5 server"]
     Worker -->|"UDP/53 DNS-over-HTTPS"| DoH["1.1.1.1 DNS-over-HTTPS"]
     Worker -->|"non-DNS UDP via SOCKS5 UoT v2"| Socks
-    Worker -->|"/mux pass-through"| Backend["Backend VLESS WebSocket"]
-    Backend -->|"smux / multiplex"| Internet
+    Worker -->|"/relay pass-through"| Backend["Backend WebSocket proxy"]
+    Backend -->|"proxy protocol / optional smux"| Internet
     Socks -->|"Direct TCP/UDP egress"| Internet
 ```
 
@@ -22,7 +22,7 @@ Main modules:
 
 - `src/lib.rs`: Worker fetch entrypoint, environment variable loading, WebSocket upgrade, and tunnel startup.
 - `src/config.rs`: Worker config parsing, including `USER_ID`, early data, and `PROXY_IP`.
-- `src/mux.rs`: `/mux` WebSocket pass-through to a backend VLESS server.
+- `src/passthrough.rs`: `/relay` WebSocket pass-through to a backend proxy server.
 - `src/protocol.rs`: VLESS request parsing for TCP, raw UDP, and XUDP.
 - `src/proxy.rs`: High-level tunnel dispatch and direct-failure cache.
 - `src/relay.rs`: TCP relay, DNS-over-HTTPS UDP, raw UDP to UoT, and XUDP to UoT.
@@ -65,11 +65,11 @@ For VLESS `cmd=3`, mihomo may send XUDP frames even when `smux.enabled=false`. T
 
 The Worker supports XUDP for UDP only. TCP mux streams are rejected because the tunnel already supports normal VLESS TCP without implementing a full generic VLESS mux server.
 
-### Backend Mux Pass-Through
+### Relay Pass-Through
 
-Requests to `/mux` use a separate pass-through mode. The Worker does not parse VLESS, `USER_ID`, `PROXY_IP`, early data, XUDP, or UoT on this path. It bridges bytes between the client WebSocket and `MUX_BACKEND_URL`, so a backend sing-box VLESS server can handle multiplexing.
+Requests to `/relay` use a separate pass-through mode. The Worker does not parse VLESS, `USER_ID`, `PROXY_IP`, early data, XUDP, or UoT on this path. It bridges bytes between the client WebSocket and `RELAY_BACKEND_URL`, so any compatible backend WebSocket proxy can own the actual proxy protocol.
 
-Use `/mux` when you want the backend to own smux/multiplex session management. Use `/ws?ed=512` when you want the Worker-native direct-first and SOCKS5 fallback behavior.
+Use `/relay` when you want a backend proxy server to own the WebSocket protocol and any optional smux/multiplex session management. Use `/ws?ed=512` when you want the Worker-native direct-first and SOCKS5 fallback behavior.
 
 ## Worker Configuration
 
@@ -82,7 +82,7 @@ Configure these Worker variables:
 | `FALLBACK_SITE` | No | No | Non-WebSocket HTTP fallback URL. |
 | `SHOW_URI` | No | No | If `true`, requests containing `USER_ID` return a generated VLESS URI. |
 | `DEBUG_LOG` | No | No | Enables per-attempt and first-response tunnel logs. Use only while debugging. |
-| `MUX_BACKEND_URL` | No | Yes if the URL contains private topology or credentials | Backend WSS URL for `/mux` pass-through. |
+| `RELAY_BACKEND_URL` | No | Yes if the URL contains private topology or credentials | Backend WSS URL for `/relay` pass-through. |
 
 Example `wrangler.toml` local values:
 
@@ -93,10 +93,10 @@ SHOW_URI = "true"
 PROXY_IP = "socks5://user:pass@proxy.example.com:1080"
 FALLBACK_SITE = ""
 DEBUG_LOG = "false"
-MUX_BACKEND_URL = "wss://backend.example.com/vless"
+RELAY_BACKEND_URL = "wss://backend.example.com/vless"
 ```
 
-For GitHub Actions deployment, store `USER_ID`, `PROXY_IP`, and `MUX_BACKEND_URL` as GitHub repository secrets. `PROXY_IP` is sensitive when it contains inline SOCKS5 credentials.
+For GitHub Actions deployment, store `USER_ID`, `PROXY_IP`, and `RELAY_BACKEND_URL` as GitHub repository secrets. `PROXY_IP` is sensitive when it contains inline SOCKS5 credentials.
 
 ## `PROXY_IP` Grammar
 
@@ -156,11 +156,11 @@ Notes:
 - `smux.enabled=false` is not required for UDP support. Disable smux only if it causes separate TCP multiplexing issues in your environment.
 - Use rules to avoid sending all device traffic through a free-plan Worker. Route only the traffic that benefits from this tunnel.
 
-Backend mux pass-through profile:
+Backend relay pass-through profile:
 
 ```yaml
 proxies:
-  - name: workers-tunnel-mux
+  - name: workers-tunnel-relay
     type: vless
     server: cf.example.com
     port: 443
@@ -171,7 +171,7 @@ proxies:
     client-fingerprint: chrome
     network: ws
     ws-opts:
-      path: /mux
+      path: /relay
       headers:
         Host: cf.example.com
     smux:
@@ -180,7 +180,7 @@ proxies:
       only-tcp: true
 ```
 
-In this profile, the Worker forwards the WebSocket stream to `MUX_BACKEND_URL`. The backend validates the VLESS UUID and handles smux. Keep `only-tcp: true` if UDP should continue to use the Worker-native XUDP/UoT profile.
+In this profile, the Worker forwards the WebSocket stream to `RELAY_BACKEND_URL`. The backend validates the VLESS UUID and may handle smux. Keep `only-tcp: true` if UDP should continue to use the Worker-native XUDP/UoT profile.
 
 ### Xray
 
@@ -271,9 +271,9 @@ Operational requirements:
 
 The Worker uses sing-box UoT v2 by opening SOCKS5 CONNECT to the magic address `sp.v2.udp-over-tcp.arpa:0`, then sending UoT v2 connect-stream datagram frames.
 
-## Backend Mux Server
+## Backend Relay Server
 
-The `/mux` path requires a backend VLESS WebSocket server. A common setup is sing-box on localhost behind Caddy or Nginx TLS.
+The `/relay` path requires a backend WebSocket proxy server that speaks the same protocol as the client. A common setup is sing-box VLESS with optional smux on localhost behind Caddy or Nginx TLS.
 
 Example sing-box backend:
 
@@ -325,14 +325,14 @@ backend.example.com {
 Then configure the Worker secret:
 
 ```text
-MUX_BACKEND_URL="wss://backend.example.com/vless"
+RELAY_BACKEND_URL="wss://backend.example.com/vless"
 ```
 
 Operational notes:
 
-- Do not configure client WebSocket early data on `/mux`; use `path: /mux`, not `/mux?ed=512`.
-- The Worker does not authenticate `/mux` traffic. The backend VLESS server must validate the UUID.
-- `MUX_BACKEND_URL` logs are sanitized before printing, but avoid embedding credentials in the backend URL.
+- Do not configure client WebSocket early data on `/relay`; use `path: /relay`, not `/relay?ed=512`.
+- The Worker does not authenticate `/relay` traffic. The backend VLESS server must validate the UUID.
+- `RELAY_BACKEND_URL` logs are sanitized before printing, but avoid embedding credentials in the backend URL.
 - Use backend logs to confirm VLESS inbound and multiplex sessions.
 
 ## Debugging
@@ -353,12 +353,12 @@ uot connected: socks5://proxy.example.com:1080 -> target.example.com:443
 uot first response: 1200 bytes via socks5://proxy.example.com:1080
 ```
 
-Expected mux pass-through markers:
+Expected relay pass-through markers:
 
 ```text
-mux backend connect: wss://backend.example.com/vless
-mux backend connected: wss://backend.example.com/vless
-mux relay ended: wss://backend.example.com/vless
+relay backend connect: wss://backend.example.com/vless
+relay backend connected: wss://backend.example.com/vless
+relay stream ended: wss://backend.example.com/vless
 ```
 
 Turn `DEBUG_LOG=false` after validation. Long-lived WebSocket tunnels plus verbose logging can contribute to Cloudflare Free plan `exceededCpu` and `loadShed` outcomes.
@@ -377,7 +377,7 @@ Common Cloudflare outcomes:
 - Cloudflare Workers cannot open arbitrary UDP sockets. Non-DNS UDP requires the SOCKS5 UoT backend.
 - UoT carries UDP over TCP. It improves compatibility but can suffer from TCP head-of-line blocking for latency-sensitive UDP.
 - The direct-failure cache is in-memory per Worker isolate. It resets on cold start and deploy.
-- Worker-native `/ws` is still one normal VLESS stream. Use `/mux` with a backend VLESS server when you need backend-managed TCP multiplexing.
+- Worker-native `/ws` is still one normal VLESS stream. Use `/relay` with a backend VLESS server when you need backend-managed TCP multiplexing.
 - Free-plan Workers are fragile for high-volume or always-on proxy workloads. Use routing rules to limit traffic, or run a dedicated VPS proxy when reliability matters.
 
 ## References
