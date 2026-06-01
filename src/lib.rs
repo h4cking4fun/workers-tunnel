@@ -39,13 +39,10 @@ async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
 
     let user_id = parse_user_id(&uuid_str);
 
-    let proxy_ip = match env.secret("PROXY_IP") {
-        Ok(proxy_ip) => proxy_ip.to_string(),
-        Err(_) => env
-            .var("PROXY_IP")
-            .map(|proxy_ip| proxy_ip.to_string())
-            .unwrap_or_default(),
-    };
+    let proxy_ip = env
+        .var("PROXY_IP")
+        .map(|proxy_ip| proxy_ip.to_string())
+        .unwrap_or_default();
     let proxy_ip = parse_outbound_targets(&proxy_ip).map_err(|err| {
         worker::Error::RustError(format!("invalid PROXY_IP configuration: {}", err))
     })?;
