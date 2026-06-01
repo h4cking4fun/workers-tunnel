@@ -104,12 +104,22 @@ Please refer to the following documentation for development and deployment.
 
 <https://developers.cloudflare.com/workers/runtime-apis/webassembly/rust/>
 
-**Important**: Before deployment, you need to modify the `vars` configuration in `wrangler.toml` and change `USER_ID` to your UUID.
+**Important**: Before deployment, configure `USER_ID` as a Worker secret.
 
-```toml
-[vars]
-USER_ID = "c55ba35f-12f6-436e-a451-4ce982c4ec1c"
+```sh
+wrangler secret put USER_ID
 ```
+
+`PROXY_IP` is an optional whitespace-separated outbound fallback list. Plain
+entries keep the existing direct fallback behavior. SOCKS5 entries route the
+original requested destination through that SOCKS5 proxy.
+
+```text
+PROXY_IP="1.2.3.4 1.2.3.4:443 socks5://proxy.example.com:1080 socks5://user:pass@proxy.example.com:1080"
+```
+
+If `PROXY_IP` contains inline SOCKS5 credentials, configure it as a Worker
+secret instead of a plain variable.
 
 ## Setup
 
