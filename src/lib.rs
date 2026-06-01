@@ -3,6 +3,7 @@ use crate::websocket::WebSocketStream;
 use worker::*;
 
 mod socks5;
+mod uot;
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
@@ -150,6 +151,10 @@ mod proxy {
                 Self::Socks5 { .. } => None,
             }
         }
+
+        fn is_socks5(&self) -> bool {
+            matches!(self, Self::Socks5 { .. })
+        }
     }
 
     pub fn parse_early_data(data: Option<String>) -> Result<Option<Vec<u8>>> {
@@ -259,7 +264,9 @@ mod proxy {
                     Error::new(ErrorKind::ConnectionRefused, "no target to connect")
                 }))
             }
-            protocol::NETWORK_TYPE_UDP => process_udp_outbound(&mut client_socket, &request).await,
+            protocol::NETWORK_TYPE_UDP => {
+                process_udp_outbound(&mut client_socket, &request, proxy_ip, debug_log).await
+            }
             unknown => Err(Error::new(
                 ErrorKind::InvalidData,
                 format!("unsupported network type: {}", unknown),
@@ -407,22 +414,44 @@ mod proxy {
     async fn process_udp_outbound(
         client_socket: &mut WebSocketStream<'_>,
         request: &TunnelRequest,
+        proxy_ip: &[OutboundTarget],
+        debug_log: bool,
     ) -> Result<()> {
-        if request.remote_port != 53 {
-            console_log!(
-                "unsupported udp proxy request: {}:{}",
-                request.remote_addr,
-                request.remote_port
-            );
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "not supported udp proxy yet: {}:{}",
-                    request.remote_addr, request.remote_port
-                ),
-            ));
+        if udp_route(request, proxy_ip) == UdpRoute::DnsOverHttps {
+            return process_dns_udp_outbound(client_socket).await;
         }
 
+        let mut last_error = None;
+        for outbound_target in proxy_ip.iter().filter(|target| target.is_socks5()) {
+            let log_target = outbound_target.log_target(request.remote_port);
+            if debug_log {
+                console_log!("connect udp via UoT: {}", log_target);
+            }
+
+            match open_uot_socket(outbound_target, request).await {
+                Ok(remote_socket) => {
+                    return relay_uot_outbound(client_socket, remote_socket, &log_target).await;
+                }
+                Err(err) if err.kind() == ErrorKind::ConnectionRefused => {
+                    last_error = Some(err);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        if let Some(err) = last_error {
+            Err(err)
+        } else {
+            let target = format!("{}:{}", request.remote_addr, request.remote_port);
+            console_log!("unsupported udp proxy request: {}", target);
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("not supported udp proxy yet: {}", target),
+            ));
+        }
+    }
+
+    async fn process_dns_udp_outbound(client_socket: &mut WebSocketStream<'_>) -> Result<()> {
         client_socket
             .write_all(&protocol::RESPONSE)
             .await
@@ -489,6 +518,74 @@ mod proxy {
         }
     }
 
+    async fn relay_uot_outbound(
+        client_socket: &mut WebSocketStream<'_>,
+        mut remote_socket: Socket,
+        log_target: &str,
+    ) -> Result<()> {
+        client_socket
+            .write_all(&protocol::RESPONSE)
+            .await
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::ConnectionAborted,
+                    format!("send response header failed: {}", e),
+                )
+            })?;
+        client_socket.flush().await?;
+
+        const MAX_UDP_PACKET: usize = u16::MAX as usize;
+
+        let (mut cr, mut cw) = tokio::io::split(client_socket);
+        let (mut rr, mut rw) = tokio::io::split(&mut remote_socket);
+
+        let c2r = async {
+            while let Some(packet) = crate::uot::read_datagram(&mut cr, MAX_UDP_PACKET).await? {
+                crate::uot::write_datagram(&mut rw, &packet).await?;
+            }
+            rw.shutdown().await?;
+            Ok::<_, Error>(())
+        };
+        tokio::pin!(c2r);
+
+        let r2c = async {
+            while let Some(packet) = crate::uot::read_datagram(&mut rr, MAX_UDP_PACKET).await? {
+                crate::uot::write_datagram(&mut cw, &packet).await?;
+                cw.flush().await?;
+            }
+            cw.shutdown().await?;
+            Ok::<_, Error>(())
+        };
+        tokio::pin!(r2c);
+
+        let result = tokio::select! {
+            result = &mut c2r => {
+                let _ = tokio::select! {
+                    _ = &mut r2c => {}
+                    _ = Delay::from(DRAIN_TIMEOUT) => {}
+                };
+                result
+            }
+            result = &mut r2c => {
+                let _ = tokio::select! {
+                    _ = &mut c2r => {}
+                    _ = Delay::from(DRAIN_TIMEOUT) => {}
+                };
+                result
+            }
+            _ = Delay::from(RELAY_TIMEOUT) => {
+                console_log!("relay idle timeout: {}", log_target);
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = result {
+            console_log!("forward udp data ended: {} - {}", log_target, e);
+        }
+
+        Ok(())
+    }
+
     async fn open_outbound_socket(
         outbound_target: &OutboundTarget,
         request: &TunnelRequest,
@@ -520,6 +617,41 @@ mod proxy {
                     ),
                 )
             }),
+        }
+    }
+
+    async fn open_uot_socket(
+        outbound_target: &OutboundTarget,
+        request: &TunnelRequest,
+    ) -> Result<Socket> {
+        match outbound_target {
+            OutboundTarget::Socks5 {
+                host,
+                port,
+                username,
+                password,
+            } => crate::uot::connect(
+                host,
+                *port,
+                username.as_deref(),
+                password.as_deref(),
+                &request.remote_addr,
+                request.remote_port,
+            )
+            .await
+            .map_err(|err| {
+                Error::new(
+                    ErrorKind::ConnectionRefused,
+                    format!(
+                        "SOCKS5 UoT outbound via socks5://{}:{} failed: {}",
+                        host, port, err
+                    ),
+                )
+            }),
+            OutboundTarget::Direct { .. } => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "direct UDP outbound is not supported",
+            )),
         }
     }
 
@@ -724,6 +856,23 @@ mod proxy {
         Ok(())
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum UdpRoute {
+        DnsOverHttps,
+        Uot,
+        Unsupported,
+    }
+
+    fn udp_route(request: &TunnelRequest, proxy_ip: &[OutboundTarget]) -> UdpRoute {
+        if request.remote_port == 53 {
+            UdpRoute::DnsOverHttps
+        } else if proxy_ip.iter().any(OutboundTarget::is_socks5) {
+            UdpRoute::Uot
+        } else {
+            UdpRoute::Unsupported
+        }
+    }
+
     fn is_direct_failure_cached(cache_key: &str) -> bool {
         let now_ms = Date::now().as_millis();
         direct_failure_cache()
@@ -769,7 +918,8 @@ mod proxy {
     #[cfg(test)]
     mod tests {
         use super::{
-            parse_outbound_target, parse_outbound_targets, DirectFailureCache, OutboundTarget,
+            parse_outbound_target, parse_outbound_targets, udp_route, DirectFailureCache,
+            OutboundTarget, TunnelRequest, UdpRoute,
         };
 
         #[test]
@@ -856,6 +1006,42 @@ mod proxy {
             assert!(cache.is_cached("example.com:443", 1001));
             assert!(!cache.is_cached("example.com:8443", 1001));
             assert!(!cache.is_cached("other.example.com:443", 1001));
+        }
+
+        #[test]
+        fn udp_dns_uses_dns_over_https() {
+            let request = TunnelRequest {
+                network_type: 2,
+                remote_port: 53,
+                remote_addr: "example.com".to_string(),
+            };
+
+            assert_eq!(udp_route(&request, &[]), UdpRoute::DnsOverHttps);
+        }
+
+        #[test]
+        fn non_dns_udp_uses_socks5_uot_when_available() {
+            let request = TunnelRequest {
+                network_type: 2,
+                remote_port: 443,
+                remote_addr: "example.com".to_string(),
+            };
+            let targets =
+                parse_outbound_targets("1.2.3.4 socks5://proxy.example.com:1080").unwrap();
+
+            assert_eq!(udp_route(&request, &targets), UdpRoute::Uot);
+        }
+
+        #[test]
+        fn non_dns_udp_without_socks5_is_unsupported() {
+            let request = TunnelRequest {
+                network_type: 2,
+                remote_port: 443,
+                remote_addr: "example.com".to_string(),
+            };
+            let targets = parse_outbound_targets("1.2.3.4 1.2.3.4:8443").unwrap();
+
+            assert_eq!(udp_route(&request, &targets), UdpRoute::Unsupported);
         }
     }
 }

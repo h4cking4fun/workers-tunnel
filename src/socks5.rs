@@ -91,7 +91,7 @@ fn connect_request(destination_host: &str, destination_port: u16) -> Result<Vec<
     Ok(request)
 }
 
-fn encode_address(host: &str) -> Result<Vec<u8>> {
+pub fn encode_address(host: &str) -> Result<Vec<u8>> {
     let host = host
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))

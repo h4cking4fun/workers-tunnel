@@ -122,6 +122,9 @@ PROXY_IP="1.2.3.4 1.2.3.4:443 socks5://proxy.example.com:1080 socks5://user:pass
 For GitHub Actions deployment, store `USER_ID` and `PROXY_IP` as GitHub
 repository secrets. The workflow passes them to Cloudflare as Worker variables.
 
+UDP/53 is handled through DNS-over-HTTPS. Other UDP traffic requires a SOCKS5
+`PROXY_IP` entry backed by sing-box UDP-over-TCP v2 support.
+
 Set `DEBUG_LOG=true` to log each outbound connection attempt. It is disabled by
 default so normal tunnel traffic does not flood Worker logs.
 
