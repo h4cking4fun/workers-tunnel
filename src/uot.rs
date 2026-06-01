@@ -8,7 +8,7 @@ use crate::socks5;
 const UOT_V2_MAGIC_HOST: &str = "sp.v2.udp-over-tcp.arpa";
 const UOT_V2_MAGIC_PORT: u16 = 0;
 
-pub async fn connect(
+pub(crate) async fn connect(
     proxy_host: &str,
     proxy_port: u16,
     username: Option<&str>,
@@ -32,7 +32,7 @@ pub async fn connect(
     Ok(socket)
 }
 
-pub fn connect_request(destination_host: &str, destination_port: u16) -> Result<Vec<u8>> {
+pub(crate) fn connect_request(destination_host: &str, destination_port: u16) -> Result<Vec<u8>> {
     let address = socks5::encode_address(destination_host)?;
     let mut request = Vec::with_capacity(address.len() + 3);
     request.push(0x01);
@@ -41,7 +41,7 @@ pub fn connect_request(destination_host: &str, destination_port: u16) -> Result<
     Ok(request)
 }
 
-pub async fn read_datagram<R>(reader: &mut R, max_len: usize) -> Result<Option<Vec<u8>>>
+pub(crate) async fn read_datagram<R>(reader: &mut R, max_len: usize) -> Result<Option<Vec<u8>>>
 where
     R: AsyncRead + Unpin,
 {
@@ -60,7 +60,7 @@ where
     Ok(Some(packet))
 }
 
-pub async fn write_datagram<W>(writer: &mut W, packet: &[u8]) -> Result<()>
+pub(crate) async fn write_datagram<W>(writer: &mut W, packet: &[u8]) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {

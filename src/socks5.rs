@@ -7,7 +7,7 @@ use worker::{Delay, Socket};
 
 const SOCKS5_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub async fn connect(
+pub(crate) async fn connect(
     proxy_host: &str,
     proxy_port: u16,
     username: Option<&str>,
@@ -91,7 +91,7 @@ fn connect_request(destination_host: &str, destination_port: u16) -> Result<Vec<
     Ok(request)
 }
 
-pub fn encode_address(host: &str) -> Result<Vec<u8>> {
+pub(crate) fn encode_address(host: &str) -> Result<Vec<u8>> {
     let host = host
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
