@@ -4,7 +4,7 @@ use worker::*;
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _: Context) -> Result<Response> {
-    let uuid_str = env.var("USER_ID")?.to_string();
+    let uuid_str = env.secret("USER_ID")?.to_string();
 
     let is_websocket = req
         .headers()
@@ -248,14 +248,27 @@ mod proxy {
     async fn process_tcp_outbound(
         client_socket: &mut WebSocketStream<'_>,
         target: &str,
-        port: u16,
+        remote_port: u16,
     ) -> Result<()> {
-        let mut remote_socket = Socket::builder().connect(target, port).map_err(|e| {
-            Error::new(
-                ErrorKind::ConnectionRefused,
-                format!("connect to remote failed: {}", e),
-            )
-        })?;
+        let (target, remote_port) = if let Some((host, port)) = target.rsplit_once(':') {
+            match port.parse::<u16>() {
+                Ok(port) => (host, port),
+                Err(_) => (target, remote_port),
+            }
+        } else {
+            (target, remote_port)
+        };
+
+        console_log!("connect to remote: {}:{}", target, remote_port);
+
+        let mut remote_socket = Socket::builder()
+            .connect(target, remote_port)
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::ConnectionRefused,
+                    format!("connect to remote failed: {}", e),
+                )
+            })?;
 
         tokio::select! {
             result = remote_socket.opened() => { result.map_err(|e| {
@@ -325,13 +338,13 @@ mod proxy {
                 result
             }
             _ = Delay::from(RELAY_TIMEOUT) => {
-                console_log!("relay timed out: {}:{}", target, port);
+                console_log!("relay timed out: {}:{}", target, remote_port);
                 return Ok(());
             }
         };
 
         if let Err(e) = result {
-            console_log!("forward data ended: {}:{} - {}", target, port, e);
+            console_log!("forward data ended: {}:{} - {}", target, remote_port, e);
         }
 
         Ok(())
