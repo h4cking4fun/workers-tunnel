@@ -118,8 +118,8 @@ original requested destination through that SOCKS5 proxy.
 PROXY_IP="1.2.3.4 1.2.3.4:443 socks5://proxy.example.com:1080 socks5://user:pass@proxy.example.com:1080"
 ```
 
-If `PROXY_IP` contains inline SOCKS5 credentials, configure it as a Worker
-secret instead of a plain variable.
+For GitHub Actions deployment, store `PROXY_IP` as a GitHub repository secret.
+The workflow passes it to Cloudflare as a Worker variable.
 
 ## Setup
 
